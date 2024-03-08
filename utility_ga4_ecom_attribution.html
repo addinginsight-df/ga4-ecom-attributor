@@ -1,0 +1,141 @@
+<script>
+  // Configurable options:
+  // - Local storage key: by default named ga_ecom_data
+  // - Evant name variable: by default named {{Event}}
+  // - Ecommerce data layer variable: by default named {{DLV - ecommerce}}
+  // - Expiration time of the objects stored: by default 7 days
+  // 
+  // - Event names to trigger on:
+  // -- add_to_cart: If it includes a item_list_name, it will save/possibly overwrite the item_list_name keyed with the item_id
+  // -- select_promotion: Will overwrite promotion_id, creative_name, creative_slot
+  // -- gtm.dom + purchase: It will remove any stored items purchased, it will also clear the promotion data
+  // -- gtm.dom: It will scrub the local storage and remove expired items
+
+  // Utility functions to handle local storage operations
+
+  // Get the data from local storage
+  function getLocalStorageData(key) {
+    try {
+      var rawData = localStorage.getItem(key);
+      return rawData ? JSON.parse(rawData) : { listData: [], promoData: [] };
+    } catch (e) {
+      console.error('Error reading from local storage, removing item:', e);
+      localStorage.removeItem(key); // Remove the problematic item
+      return { listData: [], promoData: [] }; // Return default structure
+    }
+  }
+
+  // Try setting the data to local storage, handle errors if storage is full
+  function setLocalStorageData(key, data) {
+    try {
+      localStorage.setItem(key, JSON.stringify(data));
+    } catch (e) {
+      if (e.name === 'QuotaExceededError') {
+        console.error('Local storage quota exceeded. Trying to free up space...');
+
+        // Calculate the timestamp for 24 hours ago for emergency cleanup
+        var currentTime = new Date().getTime();
+        var twentyFourHoursAgo = currentTime - (24 * 60 * 60 * 1000);
+
+        // Filter out items older than 24 hours
+        data.listData = data.listData.filter(function(item) {
+          return item.expires > twentyFourHoursAgo;
+        });
+        data.promoData = data.promoData.filter(function(promo) {
+          return promo.expires > twentyFourHoursAgo;
+        });
+
+        // Try to set the item again
+        try {
+          localStorage.setItem(key, JSON.stringify(data));
+        } catch (e) {
+          console.error('Failed to free up enough space in local storage:', e);
+          // Further handling here, like notifying the user
+        }
+      } else {
+        // Other errors could be handled here as well
+        console.error('Failed to set local storage:', e);
+        localStorage.removeItem(key); // Remove the problematic item
+      }
+    }
+  }
+
+  // Main code block for ecommerce event handling
+  var singleLocalStorageKey = 'ga4_ecom_data';
+  var dlEvent = {{Event}};
+  var ecommerce = {{DLV - ecommerce}};
+  var now = new Date();
+  now.setDate(now.getDate() + 7); // Set items to expire in 7 days
+  var timeStamp = now.getTime();
+
+  // Fetch existing local storage data
+  var localStorageData = getLocalStorageData(singleLocalStorageKey);
+
+  // Function to check if data is in the old structure
+  function isOldDataStructure(data) {
+      // Example check: old data might have a 'data' property at the root of listData items
+      return data.listData.some(function(item) { return item.hasOwnProperty('data'); });
+  }
+
+  // Check and clear old structured data
+  if (isOldDataStructure(localStorageData)) {
+      console.log('Old data structure detected, clearing local storage for a fresh start.');
+      localStorage.removeItem(singleLocalStorageKey); // Clear the entire item
+      localStorageData = { listData: [], promoData: [] }; // Reset to fresh structure
+  }
+
+  switch (dlEvent) {
+    case 'add_to_cart':
+      for (var i = 0; i < ecommerce.items.length; i++) {
+        var item = ecommerce.items[i];
+        var productID = item.hasOwnProperty('item_id') ? item.item_id : undefined;
+        var itemListName = item.hasOwnProperty('item_list_name') ? item.item_list_name : undefined; // Get item_list_name
+
+        // Only store the item if itemListName exists
+        if (itemListName) {
+          localStorageData.listData.push({
+            item_id: productID, // Directly store item_id
+            item_list_name: itemListName, // Directly store item_list_name
+            expires: timeStamp // Directly include the expires timestamp
+          });
+        }
+      }
+      break;
+    case 'select_promotion':
+      // Directly save specified promotion data fields
+      localStorageData.promoData = [{
+        promotion_id: ecommerce.promotion_id,
+        creative_name: ecommerce.creative_name,
+        creative_slot: ecommerce.creative_slot,
+        expires: timeStamp
+      }];
+      break;
+    case 'gtm.dom':
+      if ({{Has Purchase Event fired?}} == true) {
+        // Loop through all items purchased and remove them from localStorage
+        var purchasedItemIds = ecommerce.items.map(function(item) { return item.item_id; });
+        localStorageData.listData = localStorageData.listData.filter(function(item) {
+          // Remove item if its ID is found in the purchased items list
+          return !purchasedItemIds.includes(item.item_id); // Updated to item.item_id to match the new structure
+        });
+
+        // Always remove all promotion data upon purchase
+        localStorageData.promoData = [];
+      }
+      // General cleanup for items and promotions, not related to the storage limit error
+      var currentTime = new Date().getTime();
+      localStorageData.listData = localStorageData.listData.filter(function(item) {
+        return item.expires > currentTime;
+      });
+      localStorageData.promoData = localStorageData.promoData.filter(function(promo) {
+        return promo.expires > currentTime;
+      });
+      break;
+    default:
+      // Do nothing for other events
+      break;
+  }
+
+  // Update the local storage
+  setLocalStorageData(singleLocalStorageKey, localStorageData);
+</script>
